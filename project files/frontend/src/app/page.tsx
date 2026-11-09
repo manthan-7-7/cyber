@@ -20,8 +20,9 @@ import {
   uploadCaseEvidence,
   verifySession,
 } from "@/lib/api";
+import CDRAnalysisView from "./components/CDRAnalysisView";
 
-type Tab = "dashboard" | "cases" | "details" | "evidence";
+type Tab = "dashboard" | "cases" | "details" | "evidence" | "cdr";
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>("dashboard");
@@ -81,22 +82,25 @@ export default function Home() {
 
   // Load session from local storage and verify with backend on mount
   useEffect(() => {
-    const savedToken = getSavedToken();
-    const savedUser = getSavedUser();
-    if (savedToken) {
-      setToken(savedToken);
-      setUser(savedUser);
-      verifySession(savedToken)
-        .then((res) => {
+    const initSession = async () => {
+      await Promise.resolve();
+      const savedToken = getSavedToken();
+      const savedUser = getSavedUser();
+      if (savedToken) {
+        setToken(savedToken);
+        setUser(savedUser);
+        try {
+          const res = await verifySession(savedToken);
           setUser(res.user);
           saveUser(res.user);
-        })
-        .catch(() => {
+        } catch {
           clearSession();
           setToken(null);
           setUser(null);
-        });
-    }
+        }
+      }
+    };
+    initSession();
   }, []);
 
   // Fetch cases when token changes or when refreshed
@@ -128,9 +132,13 @@ export default function Home() {
   };
 
   useEffect(() => {
-    if (token) {
+    if (!token) return;
+    const fetchOnToken = async () => {
+      await Promise.resolve();
       loadCases(token);
-    }
+    };
+    fetchOnToken();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
   // Load evidence for a specific case
@@ -154,27 +162,36 @@ export default function Home() {
 
   // Load case details and evidence when selectedCaseId changes
   useEffect(() => {
-    if (!token || !selectedCaseId) {
-      setSelectedCase(null);
-      setEvidenceList([]);
-      return;
-    }
+    let isMounted = true;
+    const loadDetailsAndEvidence = async () => {
+      await Promise.resolve();
+      if (!isMounted) return;
+      if (!token || !selectedCaseId) {
+        setSelectedCase(null);
+        setEvidenceList([]);
+        return;
+      }
 
-    const loadDetails = async () => {
       setIsLoading(true);
       setError(null);
       try {
         const data = await fetchCaseById(token, selectedCaseId);
-        setSelectedCase(data);
+        if (isMounted) setSelectedCase(data);
       } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : "Failed to load case details.");
+        if (isMounted) setError(err instanceof Error ? err.message : "Failed to load case details.");
       } finally {
-        setIsLoading(false);
+        if (isMounted) setIsLoading(false);
       }
+
+      loadEvidence(selectedCaseId, token);
     };
 
-    loadDetails();
-    loadEvidence(selectedCaseId, token);
+    loadDetailsAndEvidence();
+
+    return () => {
+      isMounted = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedCaseId, token]);
 
   // Handle Authentication
@@ -673,11 +690,10 @@ export default function Home() {
           <nav className="p-3 space-y-1">
             <button
               onClick={() => setActiveTab("dashboard")}
-              className={`w-full flex items-center justify-between px-3 py-2 text-sm font-medium rounded-md transition-colors ${
-                activeTab === "dashboard"
-                  ? "bg-blue-50 text-blue-700 font-semibold"
-                  : "text-gray-700 hover:bg-gray-100"
-              }`}
+              className={`w-full flex items-center justify-between px-3 py-2 text-sm font-medium rounded-md transition-colors ${activeTab === "dashboard"
+                ? "bg-blue-50 text-blue-700 font-semibold"
+                : "text-gray-700 hover:bg-gray-100"
+                }`}
             >
               <span className="flex items-center gap-2.5">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -689,11 +705,10 @@ export default function Home() {
 
             <button
               onClick={() => setActiveTab("cases")}
-              className={`w-full flex items-center justify-between px-3 py-2 text-sm font-medium rounded-md transition-colors ${
-                activeTab === "cases"
-                  ? "bg-blue-50 text-blue-700 font-semibold"
-                  : "text-gray-700 hover:bg-gray-100"
-              }`}
+              className={`w-full flex items-center justify-between px-3 py-2 text-sm font-medium rounded-md transition-colors ${activeTab === "cases"
+                ? "bg-blue-50 text-blue-700 font-semibold"
+                : "text-gray-700 hover:bg-gray-100"
+                }`}
             >
               <span className="flex items-center gap-2.5">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -714,11 +729,10 @@ export default function Home() {
                 }
                 setActiveTab("evidence");
               }}
-              className={`w-full flex items-center justify-between px-3 py-2 text-sm font-medium rounded-md transition-colors ${
-                activeTab === "evidence"
-                  ? "bg-blue-50 text-blue-700 font-semibold"
-                  : "text-gray-700 hover:bg-gray-100"
-              }`}
+              className={`w-full flex items-center justify-between px-3 py-2 text-sm font-medium rounded-md transition-colors ${activeTab === "evidence"
+                ? "bg-blue-50 text-blue-700 font-semibold"
+                : "text-gray-700 hover:bg-gray-100"
+                }`}
             >
               <span className="flex items-center gap-2.5">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -728,6 +742,30 @@ export default function Home() {
               </span>
               <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-medium">
                 Active
+              </span>
+            </button>
+
+            {/* CDR Analysis Sidebar Item: Module 2 */}
+            <button
+              onClick={() => {
+                if (cases.length > 0 && !selectedCaseId) {
+                  setSelectedCaseId(cases[0].id);
+                }
+                setActiveTab("cdr");
+              }}
+              className={`w-full flex items-center justify-between px-3 py-2 text-sm font-medium rounded-md transition-colors ${activeTab === "cdr"
+                ? "bg-blue-50 text-blue-700 font-semibold"
+                : "text-gray-700 hover:bg-gray-100"
+                }`}
+            >
+              <span className="flex items-center gap-2.5">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" />
+                </svg>
+                CDR Analysis
+              </span>
+              <span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded font-medium">
+                Module 2
               </span>
             </button>
 
@@ -812,12 +850,14 @@ export default function Home() {
               {activeTab === "dashboard"
                 ? "Investigation Dashboard"
                 : activeTab === "cases"
-                ? "Case Management"
-                : activeTab === "evidence"
-                ? "Evidence Management Hub"
-                : "Case Record"}
+                  ? "Case Management"
+                  : activeTab === "evidence"
+                    ? "Evidence Management Hub"
+                    : activeTab === "cdr"
+                      ? "CDR Analysis & Suspect Identification"
+                      : "Case Record"}
             </span>
-            {selectedCaseId && (activeTab === "details" || activeTab === "evidence") && (
+            {selectedCaseId && (activeTab === "details" || activeTab === "evidence" || activeTab === "cdr") && (
               <span className="text-xs text-gray-500 font-mono bg-gray-100 px-2 py-0.5 rounded">
                 Case ID: {selectedCaseId.slice(0, 8)}...
               </span>
@@ -1137,6 +1177,18 @@ export default function Home() {
                   </div>
                   <div className="flex items-center gap-2">
                     <button
+                      onClick={() => {
+                        setSelectedCaseId(selectedCase.id);
+                        setActiveTab("cdr");
+                      }}
+                      className="px-3 py-1.5 bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 rounded text-xs font-medium cursor-pointer flex items-center gap-1.5"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" />
+                      </svg>
+                      CDR Analysis
+                    </button>
+                    <button
                       onClick={() => openEditModal(selectedCase)}
                       className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded text-xs font-medium cursor-pointer"
                     >
@@ -1240,6 +1292,20 @@ export default function Home() {
                 </div>
               )}
             </div>
+          )}
+
+          {/* TAB 5: CDR ANALYSIS & SUSPECT IDENTIFICATION (MODULE 2) */}
+          {activeTab === "cdr" && (
+            <CDRAnalysisView
+              token={token}
+              cases={cases}
+              selectedCaseId={selectedCaseId}
+              onSelectCaseId={(id) => setSelectedCaseId(id)}
+              onRequestAuth={() => {
+                setAuthError(null);
+                setShowAuthModal(true);
+              }}
+            />
           )}
         </div>
       </main>
@@ -1510,22 +1576,20 @@ export default function Home() {
               <button
                 type="button"
                 onClick={() => setAuthMode("login")}
-                className={`flex-1 py-1.5 text-center font-medium border-b-2 cursor-pointer ${
-                  authMode === "login"
-                    ? "border-blue-600 text-blue-600"
-                    : "border-transparent text-gray-500 hover:text-gray-700"
-                }`}
+                className={`flex-1 py-1.5 text-center font-medium border-b-2 cursor-pointer ${authMode === "login"
+                  ? "border-blue-600 text-blue-600"
+                  : "border-transparent text-gray-500 hover:text-gray-700"
+                  }`}
               >
                 Sign In Credentials
               </button>
               <button
                 type="button"
                 onClick={() => setAuthMode("token")}
-                className={`flex-1 py-1.5 text-center font-medium border-b-2 cursor-pointer ${
-                  authMode === "token"
-                    ? "border-blue-600 text-blue-600"
-                    : "border-transparent text-gray-500 hover:text-gray-700"
-                }`}
+                className={`flex-1 py-1.5 text-center font-medium border-b-2 cursor-pointer ${authMode === "token"
+                  ? "border-blue-600 text-blue-600"
+                  : "border-transparent text-gray-500 hover:text-gray-700"
+                  }`}
               >
                 Direct Bearer Token
               </button>

@@ -280,3 +280,106 @@ export async function verifySession(token: string): Promise<{ user: AuthUser }> 
   return response.json();
 }
 
+// ============================================================================
+// CDR Analysis API Methods (Module 2)
+// ============================================================================
+
+import {
+  AnalysisHistoryItem,
+  CDRCaseSummary,
+  PatternAnalysisResponse,
+  TowerAnalysisResponse,
+} from "@/types/case";
+
+export async function fetchCDRCaseSummary(token: string, caseId: string): Promise<CDRCaseSummary> {
+  const response = await fetch(`${BACKEND_URL}/api/cdr/cases/${caseId}/summary`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.detail || `Failed to fetch CDR summary (HTTP ${response.status})`);
+  }
+
+  return response.json();
+}
+
+export async function runPatternAnalysis(
+  token: string,
+  caseId: string,
+  suspectNumber: string,
+  options?: { midnightStart?: number; midnightEnd?: number; intervalSeconds?: number }
+): Promise<PatternAnalysisResponse> {
+  const response = await fetch(`${BACKEND_URL}/api/cdr/pattern-analysis`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      case_id: caseId,
+      suspect_number: suspectNumber,
+      midnight_start_hour: options?.midnightStart ?? 23,
+      midnight_end_hour: options?.midnightEnd ?? 5,
+      short_interval_seconds: options?.intervalSeconds ?? 120,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.detail || `Pattern analysis failed (HTTP ${response.status})`);
+  }
+
+  return response.json();
+}
+
+export async function runTowerAnalysis(
+  token: string,
+  caseId: string,
+  suspectNumber: string,
+  timeWindowMinutes: number = 10
+): Promise<TowerAnalysisResponse> {
+  const response = await fetch(`${BACKEND_URL}/api/cdr/tower-analysis`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      case_id: caseId,
+      suspect_number: suspectNumber,
+      time_window_minutes: timeWindowMinutes,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.detail || `Cell tower analysis failed (HTTP ${response.status})`);
+  }
+
+  return response.json();
+}
+
+export async function fetchAnalysisHistory(
+  token: string,
+  caseId: string
+): Promise<AnalysisHistoryItem[]> {
+  const response = await fetch(`${BACKEND_URL}/api/cdr/cases/${caseId}/history`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.detail || `Failed to fetch history (HTTP ${response.status})`);
+  }
+
+  return response.json();
+}

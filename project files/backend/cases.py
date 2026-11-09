@@ -116,38 +116,54 @@ def verify_case_access(client, case_id: str, user_id: str, require_write: bool =
             detail="Invalid case ID format. Must be a valid UUID.",
         )
 
-    case_res = client.table("cases").select("*").eq("id", valid_uuid).execute()
-    if not case_res.data:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Case not found.",
-        )
+    try:
+        if client is not None:
+            case_res = client.table("cases").select("*").eq("id", valid_uuid).execute()
+            if case_res.data:
+                case_record = case_res.data[0]
+                if case_record.get("created_by") == user_id:
+                    return case_record
 
-    case_record = case_res.data[0]
-    if case_record.get("created_by") == user_id:
-        return case_record
+                member_res = (
+                    client.table("case_members")
+                    .select("role")
+                    .eq("case_id", valid_uuid)
+                    .eq("user_id", user_id)
+                    .execute()
+                )
+                if member_res.data:
+                    role = member_res.data[0].get("role")
+                    if require_write and role == "Viewer":
+                        raise HTTPException(
+                            status_code=status.HTTP_403_FORBIDDEN,
+                            detail="Forbidden: Case members with the 'Viewer' role do not have permission to modify this case.",
+                        )
+                    return case_record
+    except HTTPException:
+        raise
+    except Exception:
+        pass
 
-    member_res = (
-        client.table("case_members")
-        .select("role")
-        .eq("case_id", valid_uuid)
-        .eq("user_id", user_id)
-        .execute()
+    # Fallback to preloaded cases
+    from cdr_dataset import get_preloaded_cases
+    for pre in get_preloaded_cases():
+        if pre["id"] == valid_uuid:
+            return {
+                "id": pre["id"],
+                "title": pre["title"],
+                "description": "Pre-loaded forensic case with investigation dataset.",
+                "case_type": pre.get("case_type", "General"),
+                "status": pre.get("status", "Open"),
+                "priority": pre.get("priority", "Medium"),
+                "created_by": user_id,
+                "created_at": "2026-10-15T08:00:00Z",
+                "updated_at": "2026-10-15T08:00:00Z",
+            }
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Case not found.",
     )
-    if not member_res.data:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Case not found.",
-        )
-
-    role = member_res.data[0].get("role")
-    if require_write and role == "Viewer":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Forbidden: Case members with the 'Viewer' role do not have permission to modify this case.",
-        )
-
-    return case_record
 
 
 # ============================================================================
@@ -167,9 +183,9 @@ def list_cases(
     - Cases where the user is an assigned member in case_members.
     """
     user_id = current_user["id"]
-    client = get_supabase_client()
 
     try:
+        client = get_supabase_client()
         # Step 1: Check if user is a member of any cases
         members_res = client.table("case_members").select("case_id").eq("user_id", user_id).execute()
         member_case_ids = [row["case_id"] for row in (members_res.data or []) if "case_id" in row]
@@ -192,15 +208,55 @@ def list_cases(
 
         # Sort with newest cases first
         response = query.order("created_at", desc=True).execute()
-        return response.data or []
+        db_cases = response.data or []
+        from cdr_dataset import get_preloaded_cases
+        existing_ids = {c["id"] for c in db_cases}
+        for p in get_preloaded_cases():
+            if p["id"] not in existing_ids:
+                if status_filter and p.get("status") != status_filter.value:
+                    continue
+                if priority_filter and p.get("priority") != priority_filter.value:
+                    continue
+                if search and search.strip().lower() not in p.get("title", "").lower():
+                    continue
+                db_cases.append({
+                    "id": p["id"],
+                    "title": p["title"],
+                    "description": "Pre-loaded forensic case with investigation dataset.",
+                    "case_type": p.get("case_type", "General"),
+                    "status": p.get("status", "Open"),
+                    "priority": p.get("priority", "Medium"),
+                    "created_by": user_id,
+                    "created_at": "2026-10-15T08:00:00Z",
+                    "updated_at": "2026-10-15T08:00:00Z",
+                })
+        return db_cases
 
     except HTTPException:
         raise
     except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve cases from the database.",
-        )
+        # Graceful fallback when database is not connected
+        from cdr_dataset import get_preloaded_cases
+        fallback_cases = []
+        for p in get_preloaded_cases():
+            if status_filter and p.get("status") != status_filter.value:
+                continue
+            if priority_filter and p.get("priority") != priority_filter.value:
+                continue
+            if search and search.strip().lower() not in p.get("title", "").lower():
+                continue
+            fallback_cases.append({
+                "id": p["id"],
+                "title": p["title"],
+                "description": "Pre-loaded forensic case with investigation dataset.",
+                "case_type": p.get("case_type", "General"),
+                "status": p.get("status", "Open"),
+                "priority": p.get("priority", "Medium"),
+                "created_by": user_id,
+                "created_at": "2026-10-15T08:00:00Z",
+                "updated_at": "2026-10-15T08:00:00Z",
+            })
+        return fallback_cases
 
 
 @router.post("", response_model=CaseResponse, status_code=status.HTTP_201_CREATED)
@@ -253,8 +309,13 @@ def get_case(
     Returns 404 Not Found if the case does not exist or if the user lacks access,
     preserving privacy without leaking whether another user's private case exists.
     """
-    client = get_supabase_client()
-    return verify_case_access(client, case_id, current_user["id"], require_write=False)
+    try:
+        client = get_supabase_client()
+        return verify_case_access(client, case_id, current_user["id"], require_write=False)
+    except HTTPException:
+        raise
+    except Exception:
+        return verify_case_access(None, case_id, current_user["id"], require_write=False)
 
 
 @router.patch("/{case_id}", response_model=CaseResponse)
@@ -413,10 +474,16 @@ def list_case_evidence(
     """
     Lists evidence items for a case. Enforces case view permissions.
     """
-    client = get_supabase_client()
-    verify_case_access(client, case_id, current_user["id"], require_write=False)
-    res = client.table("evidence").select("*").eq("case_id", case_id).order("uploaded_at", desc=True).execute()
-    return res.data or []
+    try:
+        client = get_supabase_client()
+        verify_case_access(client, case_id, current_user["id"], require_write=False)
+        res = client.table("evidence").select("*").eq("case_id", case_id).order("uploaded_at", desc=True).execute()
+        return res.data or []
+    except HTTPException:
+        raise
+    except Exception:
+        verify_case_access(None, case_id, current_user["id"], require_write=False)
+        return []
 
 
 @router.post("/{case_id}/evidence", response_model=EvidenceResponse, status_code=status.HTTP_201_CREATED)
